@@ -3,8 +3,10 @@ from collections import Counter
 import streamlit as st
 
 # ===============================
-# Core game constants & helpers
+# Page & constants
 # ===============================
+st.set_page_config(page_title="Yahtzee 2-Player", page_icon="🎲", layout="centered")
+
 CATEGORIES = [
     "Ones", "Twos", "Threes", "Fours", "Fives", "Sixes",
     "Three of a Kind", "Four of a Kind", "Full House",
@@ -12,6 +14,9 @@ CATEGORIES = [
 ]
 UPPER = {"Ones":1, "Twos":2, "Threes":3, "Fours":4, "Fives":5, "Sixes":6}
 
+# ===============================
+# Core helpers
+# ===============================
 def roll_all():
     return [random.randint(1, 6) for _ in range(5)]
 
@@ -30,7 +35,6 @@ def score_upper(dice, face):
     return sum(d for d in dice if d == face)
 
 def score_category(dice, category):
-    from collections import Counter
     counts = Counter(dice)
     mx = max(counts.values())
     total = sum(dice)
@@ -48,7 +52,7 @@ def score_category(dice, category):
     if category == "Large Straight":
         return 40 if is_large_straight(dice) else 0
     if category == "Yahtzee":
-        return 50 if mx == 5 else 0
+        return 100 if mx == 5 else 0
     if category == "Chance":
         return total
     return 0
@@ -61,113 +65,108 @@ def score_totals(card):
     return upper_total, lower_total, bonus, grand
 
 # ===============================
-# State init/reset
+# Game state
 # ===============================
 def new_game():
-    st.session_state.players = ["Player 1", "Player 2"]
+    # keep existing names if already set, else default
+    if "players" not in st.session_state:
+        st.session_state.players = ["Player 1", "Player 2"]
+
     st.session_state.current = 0  # index of current player
     st.session_state.turns_used = {p: 0 for p in st.session_state.players}  # 0..13
     st.session_state.scorecards = {p: {cat: None for cat in CATEGORIES} for p in st.session_state.players}
     st.session_state.available = {p: CATEGORIES.copy() for p in st.session_state.players}
-
     st.session_state.dice = roll_all()
     st.session_state.holds = set()
     st.session_state.rolls_left = 3
     st.session_state.phase = "rolling"  # "rolling" | "scoring" | "done"
 
-def ensure_state():
-    if "players" not in st.session_state:
-        new_game()
-
-# ===============================
-# UI helpers
-# ===============================
-def dice_button(label, key, on_click=None):
-    return st.button(label, key=key, use_container_width=True, on_click=on_click)
-
-def render_scoreboard():
-    st.subheader("Scoreboard")
-    cols = st.columns(2)
-    for i, p in enumerate(st.session_state.players):
-        with cols[i]:
-            st.write(f"### {p}")
-            upper_total, lower_total, bonus, grand = score_totals(st.session_state.scorecards[p])
-            st.metric("Upper subtotal", upper_total)
-            st.metric("Upper bonus", bonus)
-            st.metric("Lower total", lower_total)
-            st.metric("Grand Total", grand)
-
-            # details table
-            rows = [{"Category": cat, "Score": "-" if st.session_state.scorecards[p][cat] is None else st.session_state.scorecards[p][cat]} for cat in CATEGORIES]
-            st.dataframe(rows, hide_index=True, use_container_width=True)
-
 def switch_to_next_player():
-    # advance to next player who still has turns remaining
     players = st.session_state.players
     next_idx = (st.session_state.current + 1) % len(players)
 
-    # If both finished, mark done; else keep alternating
+    # if all done -> finish
     if all(st.session_state.turns_used[p] >= 13 for p in players):
         st.session_state.phase = "done"
         return
 
-    # choose next active player (if one finished early)
-    # Loop up to len(players) times to find someone with turns left
+    # find next with turns left
     for _ in range(len(players)):
         if st.session_state.turns_used[players[next_idx]] < 13:
             st.session_state.current = next_idx
             break
         next_idx = (next_idx + 1) % len(players)
 
-    # Start the new player's turn
+    # start next player's turn
     st.session_state.rolls_left = 3
     st.session_state.dice = roll_all()
     st.session_state.holds = set()
     st.session_state.phase = "rolling"
 
 def finish_and_pass_turn(chosen_cat):
-    # score current player
     p = st.session_state.players[st.session_state.current]
     pts = score_category(st.session_state.dice, chosen_cat)
     st.session_state.scorecards[p][chosen_cat] = pts
     st.session_state.available[p].remove(chosen_cat)
     st.session_state.turns_used[p] += 1
 
-    # if this was player’s 13th turn and the other is also done -> game over
     if all(st.session_state.turns_used[x] >= 13 for x in st.session_state.players):
         st.session_state.phase = "done"
         return
 
-    # pass to next player
     switch_to_next_player()
 
 # ===============================
-# Streamlit app
+# Player name setup (first screen)
 # ===============================
-st.set_page_config(page_title="Yahtzee 2-Player", page_icon="🎲", layout="centered")
-ensure_state()
+if "player_names_set" not in st.session_state:
+    with st.form("name_form"):
+        st.title("🎲 Welcome to the game of Yahtzee! Let's Play")
+        st.subheader("Enter Player Names")
+        p1 = st.text_input("Player 1 name:", "Alice")
+        p2 = st.text_input("Player 2 name:", "Bob")
+        submitted = st.form_submit_button("Start Game")
+        if submitted:
+            st.session_state.players = [p1.strip() or "Player 1", p2.strip() or "Player 2"]
+            st.session_state.player_names_set = True
+            new_game()
+            st.rerun()
+    st.stop()  # stop until names are set
 
-st.title("🎲 Yahtzee — Two Players")
-st.caption("Alternate turns. Each player gets 13 turns. Click a die to hold/unhold before rolling again.")
+# If names are set but game state isn't initialized (e.g., first load after rerun)
+if "dice" not in st.session_state:
+    new_game()
 
-# Top controls
+# ===============================
+# UI
+# ===============================
+st.title("🎲 Let's Play!")
+st.caption("a dice game where players roll five dice up to three times per turn to achieve scoring combinations, aiming for the highest total score. Players select which dice to keep and which to re-roll, then choose a scoring category on a scorecard to fill in for that turn. Each category can only be used once, and the game concludes after 13 rounds with the highest total score winning. Each player gets 13 turns.")
+
+# Top controls & info
 left, mid, right = st.columns([1,1,1])
 with left:
     st.metric("Current Player", st.session_state.players[st.session_state.current])
 with mid:
     p = st.session_state.players[st.session_state.current]
-    st.metric("Turn (this player)", f"{st.session_state.turns_used[p]+1 if st.session_state.turns_used[p] < 13 else 13}/13")
+    st.metric("Turn (this player)", f"{min(st.session_state.turns_used[p] + 1, 13)}/13")
 with right:
     st.metric("Rolls left", st.session_state.rolls_left)
 
-b1, b2 = st.columns([1,1])
+b1, b2, b3 = st.columns([1,1,1])
 with b1:
     if st.button("🆕 New Game", use_container_width=True):
+        # keep names; just reset the game state
         new_game()
-        st.rerun()  # hard reset rerun
+        st.rerun()
 with b2:
-    # "Refresh UI" just re-runs without clearing state
     if st.button("🔁 Refresh UI", use_container_width=True):
+        st.rerun()
+with b3:
+    # optional: change names mid-app
+    if st.button("✏️ Change Names", use_container_width=True):
+        # clear only the name flag so the name form shows again
+        del st.session_state["player_names_set"]
         st.rerun()
 
 st.divider()
@@ -185,7 +184,6 @@ def toggle_hold(i):
 for i, c in enumerate(dice_cols):
     with c:
         held = i in st.session_state.holds
-        # Big button showing the die value; click toggles hold
         if st.button(f"{'🔒' if held else '⚪️'} {st.session_state.dice[i]}", key=f"die_{i}", use_container_width=True):
             toggle_hold(i)
 
@@ -235,20 +233,30 @@ if st.session_state.phase == "scoring":
     with col_b:
         st.info("Tip: If no category fits well, you can ‘zero’ one by choosing it and saving (score will be 0).")
 
-# Scoreboard for both players
-render_scoreboard()
+# Scoreboard
+st.subheader("Scoreboard")
+cols = st.columns(2)
+for i, player in enumerate(st.session_state.players):
+    with cols[i]:
+        st.write(f"### {player}")
+        upper_total, lower_total, bonus, grand = score_totals(st.session_state.scorecards[player])
+        st.metric("Upper subtotal", upper_total)
+        st.metric("Upper bonus", bonus)
+        st.metric("Lower total", lower_total)
+        st.metric("Grand Total", grand)
+        rows = [{"Category": cat, "Score": "-" if st.session_state.scorecards[player][cat] is None else st.session_state.scorecards[player][cat]}
+                for cat in CATEGORIES]
+        st.dataframe(rows, hide_index=True, use_container_width=True)
 
 # Endgame banner
 if st.session_state.phase == "done":
-    # Compute winners
     totals = {}
-    for p in st.session_state.players:
-        _, _, _, grand = score_totals(st.session_state.scorecards[p])
-        totals[p] = grand
+    for player in st.session_state.players:
+        _, _, _, grand = score_totals(st.session_state.scorecards[player])
+        totals[player] = grand
     winner = max(totals, key=totals.get)
-    # Check tie
     if list(totals.values()).count(totals[winner]) > 1:
         st.success(f"🏁 Game over! It's a tie at {totals[winner]} points.")
     else:
         st.success(f"🏁 Game over! **{winner}** wins with **{totals[winner]}** points.")
-    st.info("Press **New Game** to start again, or **Refresh UI** if something looks out of sync.")
+    st.info("Press **New Game** to start again, **Change Names** to rename players, or **Refresh UI** if something looks out of sync.")
